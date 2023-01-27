@@ -2508,3 +2508,99 @@ class TrainerHyperParameterWandbIntegrationTest(unittest.TestCase):
             trainer.hyperparameter_search(
                 direction="minimize", hp_space=hp_space, hp_name=hp_name, backend="wandb", n_trials=4, anonymous="must"
             )
+
+
+@require_torch
+@require_torch_gpu
+class TrainerFSDPWrappingTest(unittest.TestCase):
+    # Define test module classes used to check wrapping.
+    class DummyModel(PreTrainedModel):
+        def __init__(self):
+            super().__init__(PretrainedConfig())
+            # Need something with gradients or FSDP will refuse to wrap
+            self.a = nn.Parameter(torch.tensor(1).float())
+
+        def forward(self, input_ids, labels=None):
+            return input_x * self.a
+
+    class DummyModel1(DummyModel):
+        def __init__(self):
+            super().__init__()
+
+    class DummyModel2(DummyModel):
+        def __init__(self):
+            super().__init__()
+
+    class DummyModel3(DummyModel):
+        def __init__(self):
+            super().__init__()
+
+    class CombinedModel(PreTrainedModel):
+        def __init__(self):
+            super().__init__(PretrainedConfig())
+            self.module1 = TrainerFSDPWrappingTest.DummyModel1()
+            self.module2 = TrainerFSDPWrappingTest.DummyModel2()
+            self.module3 = TrainerFSDPWrappingTest.DummyModel3()
+
+        def __forward__(self, input):
+            return self.module1(self.module2(self.module3(input)))
+
+    # Ensure that fsdp_transformer_layer_cls_to_wrap behaves as expected when a single string is passed.
+    def test_single_string(self):
+        from torch.distributed.fsdp import FullyShardedDataParallel as FSDP
+
+        from transformers.testing_utils import mockenv_context
+        from transformers.trainer import FSDPOption
+
+        # FSDP only runs in parallel GPU configurations, mock things up so it looks like we're in ther right state.
+        with mockenv_context(MASTER_ADDR="localhost", MASTER_PORT="10999", RANK="0", LOCAL_RANK="0", WORLD_SIZE="1"):
+            # Create a trainer that will work with FSDP. Try to wrap layer of class DummyModel2.
+            args = TrainingArguments(
+                "..",
+                fsdp=[FSDPOption.AUTO_WRAP, FSDPOption.NO_SHARD],
+                fsdp_transformer_layer_cls_to_wrap="DummyModel2",
+                local_rank=0,
+            )
+            trainer = Trainer(TrainerFSDPWrappingTest.CombinedModel(), args)
+            wrapped_model = trainer._wrap_model(trainer.model)
+
+            # ensure that the expected modules are wrapped, and other modules are not.
+            num_modules_checked = 0
+            for name, module in wrapped_model.named_modules():
+                if name.endswith("module2"):
+                    num_modules_checked = num_modules_checked + 1
+                    assert isinstance(module, FSDP)
+                elif name.endswith("module1") or name.endswith("module3"):
+                    num_modules_checked = num_modules_checked + 1
+                    assert not isinstance(module, FSDP)
+            assert num_modules_checked is 3
+
+    # Ensure that fsdp_transformer_layer_cls_to_wrap behaves as expected when a single string is passed.
+    def test_array(self):
+        from torch.distributed.fsdp import FullyShardedDataParallel as FSDP
+
+        from transformers.testing_utils import mockenv_context
+        from transformers.trainer import FSDPOption
+
+        # FSDP only runs in parallel GPU configurations, mock things up so it looks like we're in ther right state.
+        with mockenv_context(MASTER_ADDR="localhost", MASTER_PORT="10999", RANK="0", LOCAL_RANK="0", WORLD_SIZE="1"):
+            # Create a trainer that will work with FSDP. Try to wrap layer of class DummyModel2.
+            args = TrainingArguments(
+                "..",
+                fsdp=[FSDPOption.AUTO_WRAP, FSDPOption.NO_SHARD],
+                fsdp_transformer_layer_cls_to_wrap=["DummyModel1", "DummyModel3"],
+                local_rank=0,
+            )
+            trainer = Trainer(TrainerFSDPWrappingTest.CombinedModel(), args)
+            wrapped_model = trainer._wrap_model(trainer.model)
+            
+            # ensure that the expected modules are wrapped, and other modules are not.
+            num_modules_checked = 0
+            for name, module in wrapped_model.named_modules():
+                if name.endswith("module1") or name.endswith("module3"):
+                    num_modules_checked = num_modules_checked + 1
+                    assert isinstance(module, FSDP)
+                elif name.endswith("module2"):
+                    num_modules_checked = num_modules_checked + 1
+                    assert not isinstance(module, FSDP)
+            assert num_modules_checked is 3
