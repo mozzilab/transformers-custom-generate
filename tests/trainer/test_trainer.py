@@ -2508,3 +2508,35 @@ class TrainerHyperParameterWandbIntegrationTest(unittest.TestCase):
             trainer.hyperparameter_search(
                 direction="minimize", hp_space=hp_space, hp_name=hp_name, backend="wandb", n_trials=4, anonymous="must"
             )
+
+
+@require_torch
+class TrainerFSDPTest(unittest.TestCase):
+    def test_fsdp_wrapping(self):
+        from transformers.trainer import FSDPOption
+
+        class DummyModel1(PreTrainedModel):
+            def __init__(self, num_params: int):
+                super().__init__(PretrainedConfig())
+            def forward(self, input_ids, labels=None):
+                return input_ids
+        class DummyModel2(PreTrainedModel):
+            def __init__(self, num_params: int):
+                super().__init__(PretrainedConfig())
+            def forward(self, input_ids, labels=None):
+                return input_ids
+        class ModuleCompose(nn.Module):
+            def __init__(self):
+                super.__init__()
+                self.module1 = DummyModel1()
+                self.module2 = DummyModel2()
+            def __forward__(self, input):
+                return self.module1(self.module2(input))
+
+        model = ModuleCompose()
+
+        args = TrainingArguments("..", fsdp=[FSDPOption.AUTO_WRAP], fsdp_transformer_layer_cls_to_wrap="DummyModel2")
+        trainer = Trainer(model, args)
+        print(trainer.model)
+        print(trainer.model_wrapped)
+        

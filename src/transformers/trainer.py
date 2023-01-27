@@ -1407,15 +1407,18 @@ class Trainer:
                         size_based_auto_wrap_policy, min_num_params=self.args.fsdp_min_num_params
                     )
                 elif self.args.fsdp_transformer_layer_cls_to_wrap is not None:
-                    transformer_cls_to_wrap = get_module_class_from_name(
-                        model, self.args.fsdp_transformer_layer_cls_to_wrap
-                    )
-                    if transformer_cls_to_wrap is None:
+                    if isinstance(self.args.fsdp_transformer_layer_cls_to_wrap, str):
+                        transformer_cls_to_wrap = { get_module_class_from_name(model, self.args.fsdp_transformer_layer_cls_to_wrap) }
+                    elif isinstance(self.args.fsdp_transformer_layer_cls_to_wrap, list) and all(isinstance(elem, str) for elem in self.args.fsdp_transformer_layer_cls_to_wrap):
+                        transformer_cls_to_wrap = { get_module_class_from_name(model, name) for name in self.args.fsdp_transformer_layer_cls_to_wrap }
+                    else:
+                        raise Exception("fsdp_transformer_layer_cls_to_wrap must be a single string or a list of strings.")
+                    if None in transformer_cls_to_wrap:
                         raise Exception("Could not find the transformer layer class to wrap in the model.")
                     auto_wrap_policy = functools.partial(
                         transformer_auto_wrap_policy,
                         # Transformer layer class to wrap
-                        transformer_layer_cls={transformer_cls_to_wrap},
+                        transformer_layer_cls=transformer_cls_to_wrap,
                     )
             mixed_precision_policy = None
             dtype = None
